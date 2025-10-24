@@ -553,10 +553,72 @@ def register(app):
                 db.session.bulk_insert_mappings(VulnerabilityReference, ref_data)
                 print(f'   Inserted {len(ref_data)} references')
         
-        # TODO: CPE match insertion needs package creation first - skipping for now
-        # Focus on getting vulnerabilities and references working correctly
+        # Bulk insert CPE matches with proper package creation
         if batch_data['cpe_matches']:
-            print(f'   Skipped {len(batch_data["cpe_matches"])} CPE matches (requires package processing)')
+            # Get vulnerability IDs for CPE matches
+            vuln_ids = {}
+            for cpe in batch_data['cpe_matches']:
+                cve_id = cpe['cve_id']
+                if cve_id not in vuln_ids:
+                    vuln = Vulnerability.query.filter_by(cve_id=cve_id).first()
+                    if vuln:
+                        vuln_ids[cve_id] = vuln.vuln_id
+            
+            # Create packages and CPE matches
+            package_cache = {}
+            cpe_matches_to_insert = []
+            
+            for cpe in batch_data['cpe_matches']:
+                cve_id = cpe['cve_id']
+                if cve_id in vuln_ids:
+                    # Parse CPE URI to extract package name
+                    package_name = extract_package_name_from_cpe(cpe['cpe23Uri'])
+                    if package_name:
+                        # Get or create package
+                        if package_name not in package_cache:
+                            pkg = Package.query.filter_by(package_name=package_name).first()
+                            if not pkg:
+                                pkg = Package(package_name=package_name)
+                                db.session.add(pkg)
+                                db.session.flush()  # Get the package_id
+                            package_cache[package_name] = pkg.package_id
+                        
+                        # Prepare CPE match data
+                        cpe_matches_to_insert.append({
+                            'vuln_id': vuln_ids[cve_id],
+                            'package_id': package_cache[package_name],
+                            'vulnerable': cpe['vulnerable'],
+                            'cpe_uri': cpe['cpe23Uri'],
+                            'minimum_version': None,  # Parse from CPE if needed
+                            'minimum_version_op': None,
+                            'maximum_version': None,
+                            'maximum_version_op': None
+                        })
+            
+            if cpe_matches_to_insert:
+                db.session.bulk_insert_mappings(CPEMatch, cpe_matches_to_insert)
+                print(f'   Inserted {len(cpe_matches_to_insert)} CPE matches')
+            else:
+                print(f'   Skipped {len(batch_data["cpe_matches"])} CPE matches (could not parse package names)')
+    
+def extract_package_name_from_cpe(cpe_uri):
+    """Extract package name from CPE URI"""
+    try:
+        # CPE format: cpe:2.3:part:vendor:product:version:update:edition:language:sw_edition:target_sw:target_hw:other
+        parts = cpe_uri.split(':')
+        if len(parts) >= 5:
+            vendor = parts[3]
+            product = parts[4]
+            # For most cases, use product name, but some special handling might be needed
+            if vendor != '*' and product != '*':
+                return f"{vendor}-{product}" if vendor != product else product
+            elif product != '*':
+                return product
+            elif vendor != '*':
+                return vendor
+        return None
+    except Exception:
+        return None
 
     def process_nvd_cve_reference(vuln: Vulnerability, item: dict):
         ref_type = item['source']
