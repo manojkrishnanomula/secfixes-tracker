@@ -316,11 +316,11 @@ def register(app):
     @app.cli.command('import-nvd-files', help='Import NVD CVEs from local JSON files.')
     @click.argument('directory')  
     def import_nvd_files(directory: str):
+        """Import NVD CVEs from local JSON files with optimized batch processing"""
         import os
         import json
         import glob
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        from threading import Lock
         
         if not os.path.exists(directory):
             print(f'E: Directory {directory} does not exist.')
@@ -333,33 +333,24 @@ def register(app):
             print(f'I: No CVE files found in {directory}')
             return
         
-        print(f'I: Processing {len(cve_files)} CVE files from {directory} with parallel workers')
+        print(f'I: Processing {len(cve_files)} CVE files from {directory} with optimized batch processing')
         
-        # Use fewer workers but larger batches to reduce database contention
-        max_workers = 8  # Fewer workers to reduce lock contention
-        batch_size = 5000  # Larger batches for better efficiency
-        db_lock = Lock()
+        # Optimized batch processing - no database locks needed
+        max_workers = 20  # More workers since no database contention
+        batch_size = 2000  # Smaller batches for memory efficiency
         
-        def process_cve_file(cve_file):
-            """Process a single CVE file"""
+        def parse_cve_file(cve_file):
+            """Parse a single CVE file and return structured data"""
             try:
                 with open(cve_file, 'r') as f:
                     cve_data = json.load(f)
                 
-                # Adapt format for our existing process_nvd_cve_item function
-                item = {"cve": cve_data}
-                
-                # Thread-safe database processing
-                with db_lock:
-                    with app.app_context():
-                        process_nvd_cve_item(item)
-                
-                return True, None
+                return parse_cve_data(cve_data), None
                 
             except Exception as e:
-                return False, str(e)
+                return None, str(e)
         
-        # Process files in batches with parallel workers
+        # Process files in batches with parallel parsing
         processed_count = 0
         skipped_count = 0
         
@@ -369,38 +360,197 @@ def register(app):
             
             print(f'I: Processing batch {batch_start//batch_size + 1}/{(len(cve_files)-1)//batch_size + 1}: {len(batch_files)} files')
             
+            # Parse all files in parallel (no database operations)
+            batch_data = {
+                'vulnerabilities': [],
+                'references': [],
+                'cpe_matches': []
+            }
+            
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Submit all files in batch for parallel processing
-                futures = {executor.submit(process_cve_file, cve_file): cve_file for cve_file in batch_files}
+                # Submit all files in batch for parallel parsing
+                futures = {executor.submit(parse_cve_file, cve_file): cve_file for cve_file in batch_files}
                 
                 batch_processed = 0
                 batch_skipped = 0
                 
                 for future in as_completed(futures):
-                    success, error = future.result()
-                    if success:
+                    cve_data, error = future.result()
+                    if cve_data:
                         batch_processed += 1
+                        # Collect data for bulk operations
+                        batch_data['vulnerabilities'].extend(cve_data['vulnerabilities'])
+                        batch_data['references'].extend(cve_data['references'])
+                        batch_data['cpe_matches'].extend(cve_data['cpe_matches'])
                     else:
                         batch_skipped += 1
                         if batch_skipped <= 5:  # Only show first few errors
                             print(f'W: Error: {error}')
-                
-                processed_count += batch_processed
-                skipped_count += batch_skipped
-                
-                print(f'   Batch complete: {batch_processed} processed, {batch_skipped} skipped')
             
-            # Commit batch less frequently
-            if (batch_start // batch_size + 1) % 5 == 0:  # Commit every 5 batches
+            # Single bulk database operation for entire batch
+            if batch_data['vulnerabilities']:
                 with app.app_context():
+                    bulk_insert_batch(batch_data)
                     db.session.commit()
-                    print(f'   Database committed at batch {batch_start//batch_size + 1}')
+                    print(f'   Bulk inserted: {len(batch_data["vulnerabilities"])} vulnerabilities, {len(batch_data["references"])} references, {len(batch_data["cpe_matches"])} CPE matches')
             
+            processed_count += batch_processed
+            skipped_count += batch_skipped
+            
+            print(f'   Batch complete: {batch_processed} processed, {batch_skipped} skipped')
             print(f'I: Progress: {processed_count}/{len(cve_files)} files processed ({(processed_count/len(cve_files)*100):.1f}%)')
         
-        print(f'I: Processed {processed_count} CVEs from local files with parallel processing')
+        print(f'I: Processed {processed_count} CVEs from local files with optimized batch processing')
         if skipped_count > 0:
             print(f'W: Skipped {skipped_count} files due to errors')
+
+    def parse_cve_data(cve_data):
+        """Parse CVE data and return structured data for bulk insertion"""
+        import re
+        
+        cve = cve_data.get('cve', {})
+        cve_id = cve.get('id', '')
+        
+        # Validate CVE ID format
+        cve_pattern = r'^CVE-\d{4}-\d{4,7}$'
+        if not re.match(cve_pattern, cve_id):
+            return {'vulnerabilities': [], 'references': [], 'cpe_matches': []}
+        
+        # Extract description
+        descriptions = cve.get('descriptions', [])
+        cve_description = None
+        for desc in descriptions:
+            if desc.get('lang') == "en":
+                cve_description = desc.get('value')
+                break
+        if not cve_description and descriptions:
+            cve_description = descriptions[0].get('value')
+        
+        # Extract CVSS data
+        cvssMetricV31 = cve.get('metrics', {}).get('cvssMetricV31', [])
+        cvss3_score = None
+        cvss3_vector = None
+        if cvssMetricV31 and len(cvssMetricV31) > 0:
+            impact = cvssMetricV31[0].get('cvssData', {})
+            cvss3_score = impact.get('baseScore')
+            cvss3_vector = impact.get('vectorString')
+        
+        # Build vulnerability data
+        vulnerability_data = {
+            'cve_id': cve_id,
+            'description': cve_description,
+            'cvss3_score': cvss3_score,
+            'cvss3_vector': cvss3_vector
+        }
+        
+        # Parse references
+        references_data = []
+        if 'references' in cve:
+            for ref in cve['references']:
+                ref_type = ref.get('source', '')
+                ref_tags = ref.get('tags', [])
+                ref_uri = ref.get('url', '')
+                
+                if ref_uri:
+                    if ref_tags:
+                        ref_type = ref_tags[0]
+                    
+                    references_data.append({
+                        'cve_id': cve_id,
+                        'ref_type': ref_type,
+                        'ref_uri': ref_uri
+                    })
+        
+        # Parse CPE matches
+        cpe_matches_data = []
+        if 'configurations' in cve and len(cve['configurations']) > 0:
+            for configuration in cve['configurations']:
+                if 'nodes' in configuration:
+                    for node in configuration['nodes']:
+                        if 'cpeMatch' in node:
+                            for match in node['cpeMatch']:
+                                cpe_matches_data.append({
+                                    'cve_id': cve_id,
+                                    'cpe23Uri': match.get('criteria', ''),
+                                    'vulnerable': match.get('vulnerable', False)
+                                })
+        
+        return {
+            'vulnerabilities': [vulnerability_data],
+            'references': references_data,
+            'cpe_matches': cpe_matches_data
+        }
+
+    def bulk_insert_batch(batch_data):
+        """Perform bulk database operations for a batch of CVE data"""
+        from sqlalchemy.dialects.sqlite import insert
+        
+        # Bulk insert vulnerabilities
+        if batch_data['vulnerabilities']:
+            vuln_stmt = insert(Vulnerability).values(batch_data['vulnerabilities'])
+            vuln_stmt = vuln_stmt.on_conflict_do_update(
+                index_elements=['cve_id'],
+                set_=dict(
+                    description=vuln_stmt.excluded.description,
+                    cvss3_score=vuln_stmt.excluded.cvss3_score,
+                    cvss3_vector=vuln_stmt.excluded.cvss3_vector
+                )
+            )
+            db.session.execute(vuln_stmt)
+        
+        # Bulk insert references
+        if batch_data['references']:
+            # Get vulnerability IDs for references
+            vuln_ids = {}
+            for ref in batch_data['references']:
+                cve_id = ref['cve_id']
+                if cve_id not in vuln_ids:
+                    vuln = Vulnerability.query.filter_by(cve_id=cve_id).first()
+                    if vuln:
+                        vuln_ids[cve_id] = vuln.vuln_id
+            
+            # Prepare reference data with vuln_id
+            ref_data = []
+            for ref in batch_data['references']:
+                cve_id = ref['cve_id']
+                if cve_id in vuln_ids:
+                    ref_data.append({
+                        'vuln_id': vuln_ids[cve_id],
+                        'ref_type': ref['ref_type'],
+                        'ref_uri': ref['ref_uri']
+                    })
+            
+            if ref_data:
+                ref_stmt = insert(VulnerabilityReference).values(ref_data)
+                ref_stmt = ref_stmt.on_conflict_do_nothing()
+                db.session.execute(ref_stmt)
+        
+        # Bulk insert CPE matches
+        if batch_data['cpe_matches']:
+            # Get vulnerability IDs for CPE matches
+            vuln_ids = {}
+            for cpe in batch_data['cpe_matches']:
+                cve_id = cpe['cve_id']
+                if cve_id not in vuln_ids:
+                    vuln = Vulnerability.query.filter_by(cve_id=cve_id).first()
+                    if vuln:
+                        vuln_ids[cve_id] = vuln.vuln_id
+            
+            # Prepare CPE match data
+            cpe_data = []
+            for cpe in batch_data['cpe_matches']:
+                cve_id = cpe['cve_id']
+                if cve_id in vuln_ids:
+                    cpe_data.append({
+                        'vuln_id': vuln_ids[cve_id],
+                        'cpe23Uri': cpe['cpe23Uri'],
+                        'vulnerable': cpe['vulnerable']
+                    })
+            
+            if cpe_data:
+                cpe_stmt = insert(CPEMatch).values(cpe_data)
+                cpe_stmt = cpe_stmt.on_conflict_do_nothing()
+                db.session.execute(cpe_stmt)
 
     def process_nvd_cve_reference(vuln: Vulnerability, item: dict):
         ref_type = item['source']
