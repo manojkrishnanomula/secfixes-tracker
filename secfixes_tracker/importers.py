@@ -314,7 +314,7 @@ def register(app):
         print(f'I: Imported NVD feed successfully.')
 
     @app.cli.command('import-nvd-files', help='Import NVD CVEs from local JSON files.')
-    @click.argument('directory')
+    @click.argument('directory')  
     def import_nvd_files(directory: str):
         import os
         import json
