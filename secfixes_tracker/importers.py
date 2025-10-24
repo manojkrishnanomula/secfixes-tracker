@@ -339,9 +339,9 @@ def register(app):
         
         print(f'I: Processing {len(cve_files)} CVE files from {directory} with optimized batch processing')
         
-        # EMERGENCY OPTIMIZATION: Reduce memory usage and workers
-        max_workers = 5   # Fewer workers to reduce memory pressure
-        batch_size = 500  # Much smaller batches for GitHub Actions limits
+        # MEMORY OPTIMIZATION: Keep all data but process more carefully
+        max_workers = 4   # Conservative worker count for memory management
+        batch_size = 300  # Small batches to prevent memory exhaustion
         
         def parse_cve_file(cve_file):
             """Parse a single CVE file and return structured data"""
@@ -398,6 +398,11 @@ def register(app):
                     bulk_insert_batch(batch_data)
                     db.session.commit()
                     print(f'   Bulk inserted: {len(batch_data["vulnerabilities"])} vulnerabilities, {len(batch_data["references"])} references, {len(batch_data["cpe_matches"])} CPE matches')
+                    
+                # Clear batch data and force garbage collection
+                batch_data.clear()
+                import gc
+                gc.collect()
             
             processed_count += batch_processed
             skipped_count += batch_skipped

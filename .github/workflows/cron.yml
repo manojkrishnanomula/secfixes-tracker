@@ -54,11 +54,13 @@ jobs:
       
       - name: Import NVD from local files
         run: |
-          # Import NVD CVEs from local files (emergency optimized - recent years only!)
-          echo "=== Emergency mode: Importing recent years only ==="
-          for year in $(seq 2022 $(date "+%Y")); do
+          # Import NVD CVEs from local files (memory optimized but all years!)
+          echo "=== Importing ALL years with memory optimization ==="
+          for year in $(seq 2018 $(date "+%Y")); do
             echo "=== Importing CVEs for year $year from local files ==="
-            timeout 45m flask import-nvd-files vuln-list-nvd/api/$year || echo "Year $year timed out, continuing..."
+            timeout 60m flask import-nvd-files vuln-list-nvd/api/$year || echo "Year $year timed out, continuing..."
+            # Force garbage collection between years
+            python3 -c "import gc; gc.collect()" 
             echo "=== Completed year $year ==="
           done
         env:
