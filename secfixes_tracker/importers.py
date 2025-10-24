@@ -613,16 +613,45 @@ def register(app):
                 print(f'   Skipped {len(batch_data["cpe_matches"])} CPE matches (could not parse package names)')
 
     def extract_package_name_from_cpe(cpe_uri):
-        """Extract package name from CPE URI"""
+        """Extract package name from CPE URI with Alpine Linux package name mapping"""
         try:
             # CPE format: cpe:2.3:part:vendor:product:version:update:edition:language:sw_edition:target_sw:target_hw:other
             parts = cpe_uri.split(':')
             if len(parts) >= 5:
                 vendor = parts[3]
                 product = parts[4]
-                # For most cases, use product name, but some special handling might be needed
+                
+                # Alpine Linux package name mappings
+                # Many packages in Alpine use just the product name, not vendor-product
+                alpine_package_mappings = {
+                    # Common cases where Alpine uses product name directly
+                    ('debian', 'dpkg'): 'dpkg',
+                    ('gnu', 'bash'): 'bash', 
+                    ('apache', 'httpd'): 'apache2',
+                    ('nginx', 'nginx'): 'nginx',
+                    ('sqlite', 'sqlite'): 'sqlite',
+                    ('python', 'python'): 'python3',
+                    ('nodejs', 'node.js'): 'nodejs',
+                    ('postgresql', 'postgresql'): 'postgresql',
+                    ('mysql', 'mysql'): 'mysql',
+                    ('redis', 'redis'): 'redis',
+                    ('vim', 'vim'): 'vim',
+                    ('git', 'git'): 'git',
+                    ('openssh', 'openssh'): 'openssh',
+                    ('openssl', 'openssl'): 'openssl',
+                    ('curl', 'curl'): 'curl',
+                    ('wget', 'wget'): 'wget',
+                }
+                
+                # Check for specific Alpine mappings first
                 if vendor != '*' and product != '*':
-                    return f"{vendor}-{product}" if vendor != product else product
+                    mapping_key = (vendor.lower(), product.lower())
+                    if mapping_key in alpine_package_mappings:
+                        return alpine_package_mappings[mapping_key]
+                    
+                    # For unknown combinations, prefer product name over vendor-product
+                    # This matches Alpine's common pattern
+                    return product
                 elif product != '*':
                     return product
                 elif vendor != '*':
