@@ -37,6 +37,10 @@ LANGUAGE_REWRITERS = {
 
 
 def register(app):
+    # CACHE BUSTER: Force GitHub Actions to use latest code - 2025-10-24
+    # Fixed ON CONFLICT issues and added proper bulk processing
+    print("I: Importers module loaded - bulk processing fixes active")
+    
     @app.cli.command('import-nvd', help='Import a NVD feed.')
     @click.argument('days')
     def import_nvd_cve(days: str):
@@ -496,6 +500,8 @@ def register(app):
 
     def bulk_insert_batch(batch_data):
         """Perform bulk database operations for a batch of CVE data"""
+        # FIXED: Removed ON CONFLICT clauses that were causing sqlite errors
+        print(f"I: bulk_insert_batch called - using FIXED version (no ON CONFLICT)")
         from sqlalchemy.dialects.sqlite import insert
         
         # Bulk insert vulnerabilities with conflict handling
