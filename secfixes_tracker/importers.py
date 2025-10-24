@@ -606,25 +606,25 @@ def register(app):
                 print(f'   Inserted {len(cpe_matches_to_insert)} CPE matches')
             else:
                 print(f'   Skipped {len(batch_data["cpe_matches"])} CPE matches (could not parse package names)')
-    
-def extract_package_name_from_cpe(cpe_uri):
-    """Extract package name from CPE URI"""
-    try:
-        # CPE format: cpe:2.3:part:vendor:product:version:update:edition:language:sw_edition:target_sw:target_hw:other
-        parts = cpe_uri.split(':')
-        if len(parts) >= 5:
-            vendor = parts[3]
-            product = parts[4]
-            # For most cases, use product name, but some special handling might be needed
-            if vendor != '*' and product != '*':
-                return f"{vendor}-{product}" if vendor != product else product
-            elif product != '*':
-                return product
-            elif vendor != '*':
-                return vendor
-        return None
-    except Exception:
-        return None
+
+    def extract_package_name_from_cpe(cpe_uri):
+        """Extract package name from CPE URI"""
+        try:
+            # CPE format: cpe:2.3:part:vendor:product:version:update:edition:language:sw_edition:target_sw:target_hw:other
+            parts = cpe_uri.split(':')
+            if len(parts) >= 5:
+                vendor = parts[3]
+                product = parts[4]
+                # For most cases, use product name, but some special handling might be needed
+                if vendor != '*' and product != '*':
+                    return f"{vendor}-{product}" if vendor != product else product
+                elif product != '*':
+                    return product
+                elif vendor != '*':
+                    return vendor
+            return None
+        except Exception:
+            return None
 
     def process_nvd_cve_reference(vuln: Vulnerability, item: dict):
         ref_type = item['source']
