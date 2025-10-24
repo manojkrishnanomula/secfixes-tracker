@@ -46,13 +46,18 @@ jobs:
       - name: Import secfixes
         run: flask import-secfixes
 
-      - name: Import NVD
+      - name: Clone vuln-list-nvd
         run: |
-          # Import NVD CVEs year by year from 2018 to current year
-          # Database will contain all CVEs, but export filters to Alpine-relevant ones
+          echo "=== Cloning aquasecurity/vuln-list-nvd repository ==="
+          git clone https://github.com/aquasecurity/vuln-list-nvd.git --depth 1
+          echo "✓ Repository cloned"
+      
+      - name: Import NVD from local files
+        run: |
+          # Import NVD CVEs from local files (no rate limits!)
           for year in $(seq 2018 $(date "+%Y")); do
-            echo "=== Importing CVEs for year $year ==="
-            flask import-nvd $year
+            echo "=== Importing CVEs for year $year from local files ==="
+            flask import-nvd-files vuln-list-nvd/api/$year
             echo "=== Completed year $year ==="
           done
         env:

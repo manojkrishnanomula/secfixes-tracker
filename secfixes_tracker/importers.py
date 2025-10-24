@@ -313,6 +313,54 @@ def register(app):
         
         print(f'I: Imported NVD feed successfully.')
 
+    @app.cli.command('import-nvd-files', help='Import NVD CVEs from local JSON files.')
+    @click.argument('directory')
+    def import_nvd_files(directory: str):
+        import os
+        import json
+        import glob
+        
+        if not os.path.exists(directory):
+            print(f'E: Directory {directory} does not exist.')
+            return
+        
+        # Find all CVE JSON files in the directory
+        cve_files = glob.glob(os.path.join(directory, 'CVE-*.json'))
+        
+        if not cve_files:
+            print(f'I: No CVE files found in {directory}')
+            return
+        
+        print(f'I: Processing {len(cve_files)} CVE files from {directory}')
+        
+        processed_count = 0
+        skipped_count = 0
+        
+        for cve_file in cve_files:
+            try:
+                with open(cve_file, 'r') as f:
+                    cve_data = json.load(f)
+                
+                # Adapt format for our existing process_nvd_cve_item function
+                # vuln-list-nvd format: {CVE_DATA}
+                # Our function expects: {"cve": {CVE_DATA}}
+                item = {"cve": cve_data}
+                
+                # Process using existing logic
+                process_nvd_cve_item(item)
+                processed_count += 1
+                
+            except Exception as e:
+                print(f'W: Error processing {cve_file}: {e}')
+                skipped_count += 1
+        
+        # Commit all changes
+        db.session.commit()
+        
+        print(f'I: Processed {processed_count} CVEs from local files')
+        if skipped_count > 0:
+            print(f'W: Skipped {skipped_count} files due to errors')
+
     def process_nvd_cve_reference(vuln: Vulnerability, item: dict):
         ref_type = item['source']
         ref_tags = item.get('tags', [])
