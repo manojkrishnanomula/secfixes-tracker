@@ -319,6 +319,8 @@ def register(app):
         import os
         import json
         import glob
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from threading import Lock
         
         if not os.path.exists(directory):
             print(f'E: Directory {directory} does not exist.')
@@ -331,33 +333,70 @@ def register(app):
             print(f'I: No CVE files found in {directory}')
             return
         
-        print(f'I: Processing {len(cve_files)} CVE files from {directory}')
+        print(f'I: Processing {len(cve_files)} CVE files from {directory} with parallel workers')
         
-        processed_count = 0
-        skipped_count = 0
+        # Use many workers since we're processing local files (no rate limits!)
+        max_workers = 20
+        batch_size = 1000  # Process in batches for memory efficiency
+        db_lock = Lock()
         
-        for cve_file in cve_files:
+        def process_cve_file(cve_file):
+            """Process a single CVE file"""
             try:
                 with open(cve_file, 'r') as f:
                     cve_data = json.load(f)
                 
                 # Adapt format for our existing process_nvd_cve_item function
-                # vuln-list-nvd format: {CVE_DATA}
-                # Our function expects: {"cve": {CVE_DATA}}
                 item = {"cve": cve_data}
                 
-                # Process using existing logic
-                process_nvd_cve_item(item)
-                processed_count += 1
+                # Thread-safe database processing
+                with db_lock:
+                    with app.app_context():
+                        process_nvd_cve_item(item)
+                
+                return True, None
                 
             except Exception as e:
-                print(f'W: Error processing {cve_file}: {e}')
-                skipped_count += 1
+                return False, str(e)
         
-        # Commit all changes
-        db.session.commit()
+        # Process files in batches with parallel workers
+        processed_count = 0
+        skipped_count = 0
         
-        print(f'I: Processed {processed_count} CVEs from local files')
+        for batch_start in range(0, len(cve_files), batch_size):
+            batch_end = min(batch_start + batch_size, len(cve_files))
+            batch_files = cve_files[batch_start:batch_end]
+            
+            print(f'I: Processing batch {batch_start//batch_size + 1}/{(len(cve_files)-1)//batch_size + 1}: {len(batch_files)} files')
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all files in batch for parallel processing
+                futures = {executor.submit(process_cve_file, cve_file): cve_file for cve_file in batch_files}
+                
+                batch_processed = 0
+                batch_skipped = 0
+                
+                for future in as_completed(futures):
+                    success, error = future.result()
+                    if success:
+                        batch_processed += 1
+                    else:
+                        batch_skipped += 1
+                        if batch_skipped <= 5:  # Only show first few errors
+                            print(f'W: Error: {error}')
+                
+                processed_count += batch_processed
+                skipped_count += batch_skipped
+                
+                print(f'   Batch complete: {batch_processed} processed, {batch_skipped} skipped')
+            
+            # Commit batch
+            with app.app_context():
+                db.session.commit()
+            
+            print(f'I: Progress: {processed_count}/{len(cve_files)} files processed ({(processed_count/len(cve_files)*100):.1f}%)')
+        
+        print(f'I: Processed {processed_count} CVEs from local files with parallel processing')
         if skipped_count > 0:
             print(f'W: Skipped {skipped_count} files due to errors')
 
