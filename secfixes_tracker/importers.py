@@ -339,9 +339,9 @@ def register(app):
         
         print(f'I: Processing {len(cve_files)} CVE files from {directory} with optimized batch processing')
         
-        # Optimized batch processing - no database locks needed
-        max_workers = 20  # More workers since no database contention
-        batch_size = 2000  # Smaller batches for memory efficiency
+        # EMERGENCY OPTIMIZATION: Reduce memory usage and workers
+        max_workers = 5   # Fewer workers to reduce memory pressure
+        batch_size = 500  # Much smaller batches for GitHub Actions limits
         
         def parse_cve_file(cve_file):
             """Parse a single CVE file and return structured data"""
