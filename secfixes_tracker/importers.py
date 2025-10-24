@@ -345,6 +345,7 @@ def register(app):
                 with open(cve_file, 'r') as f:
                     cve_data = json.load(f)
                 
+                # cve_data is already in the correct format for vuln-list-nvd
                 return parse_cve_data(cve_data), None
                 
             except Exception as e:
@@ -408,7 +409,8 @@ def register(app):
         """Parse CVE data and return structured data for bulk insertion"""
         import re
         
-        cve = cve_data.get('cve', {})
+        # vuln-list-nvd files have CVE data at root level, not wrapped in 'cve' key
+        cve = cve_data  # Direct structure: {"id": "CVE-...", "descriptions": [...], ...}
         cve_id = cve.get('id', '')
         
         # Validate CVE ID format
@@ -426,14 +428,25 @@ def register(app):
         if not cve_description and descriptions:
             cve_description = descriptions[0].get('value')
         
-        # Extract CVSS data
-        cvssMetricV31 = cve.get('metrics', {}).get('cvssMetricV31', [])
+        # Extract CVSS data - handle both v31 and v40 metrics
+        metrics = cve.get('metrics', {})
         cvss3_score = None
         cvss3_vector = None
+        
+        # Try CVSS v3.1 first
+        cvssMetricV31 = metrics.get('cvssMetricV31', [])
         if cvssMetricV31 and len(cvssMetricV31) > 0:
             impact = cvssMetricV31[0].get('cvssData', {})
             cvss3_score = impact.get('baseScore')
             cvss3_vector = impact.get('vectorString')
+        
+        # Fallback to CVSS v4.0 if v3.1 not available
+        if not cvss3_score:
+            cvssMetricV40 = metrics.get('cvssMetricV40', [])
+            if cvssMetricV40 and len(cvssMetricV40) > 0:
+                impact = cvssMetricV40[0].get('cvssData', {})
+                cvss3_score = impact.get('baseScore')
+                cvss3_vector = impact.get('vectorString')
         
         # Build vulnerability data
         vulnerability_data = {
