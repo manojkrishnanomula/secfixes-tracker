@@ -335,9 +335,9 @@ def register(app):
         
         print(f'I: Processing {len(cve_files)} CVE files from {directory} with parallel workers')
         
-        # Use many workers since we're processing local files (no rate limits!)
-        max_workers = 20
-        batch_size = 1000  # Process in batches for memory efficiency
+        # Use fewer workers but larger batches to reduce database contention
+        max_workers = 8  # Fewer workers to reduce lock contention
+        batch_size = 5000  # Larger batches for better efficiency
         db_lock = Lock()
         
         def process_cve_file(cve_file):
@@ -390,9 +390,11 @@ def register(app):
                 
                 print(f'   Batch complete: {batch_processed} processed, {batch_skipped} skipped')
             
-            # Commit batch
-            with app.app_context():
-                db.session.commit()
+            # Commit batch less frequently
+            if (batch_start // batch_size + 1) % 5 == 0:  # Commit every 5 batches
+                with app.app_context():
+                    db.session.commit()
+                    print(f'   Database committed at batch {batch_start//batch_size + 1}')
             
             print(f'I: Progress: {processed_count}/{len(cve_files)} files processed ({(processed_count/len(cve_files)*100):.1f}%)')
         
