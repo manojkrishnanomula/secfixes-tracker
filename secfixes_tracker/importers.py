@@ -339,9 +339,9 @@ def register(app):
         
         print(f'I: Processing {len(cve_files)} CVE files from {directory} with optimized batch processing')
         
-        # MEMORY OPTIMIZATION: Keep all data but process more carefully
-        max_workers = 4   # Conservative worker count for memory management
-        batch_size = 300  # Small batches to prevent memory exhaustion
+        # OPTIMIZED: High performance settings now safe with progressive cleanup
+        max_workers = 20  # Full parallelization - progressive cleanup prevents resource buildup
+        batch_size = 2000 # Large batches for efficiency - only processing one year at a time
         
         def parse_cve_file(cve_file):
             """Parse a single CVE file and return structured data"""
